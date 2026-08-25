@@ -49,8 +49,6 @@ STATE = os.path.join(HERE, "docs", "data", "state.json")
 
 # Reward scores are sampled once a minute, so refreshing faster buys nothing.
 REFRESH_SECONDS = 30
-# Market metadata (tokens, question, end date) barely moves.
-CACHE_TTL_HOURS = 6
 # The CLOB accepts a batch of book requests; this is a polite chunk size.
 BOOK_BATCH = 50
 # Volatility costs one history call per market, so only the top candidates get it.
@@ -85,10 +83,20 @@ def reward_markets():
 
 
 def load_cache():
+    """
+    Market metadata, kept indefinitely rather than expired wholesale.
+
+    An earlier version dropped the whole cache after six hours, which on CI - where
+    it starts empty anyway - meant refetching 500 markets one at a time on every
+    run. Roughly half those calls failed under rate limiting and the published
+    board silently lost half its markets, which is worse than stale metadata:
+    a missing market reads as "no competition here" to anyone looking at it.
+
+    Tokens and questions do not change for a given condition_id, so entries never
+    go wrong, only unused. Markets leaving the rewards programme simply stop being
+    looked up.
+    """
     if not os.path.exists(CACHE):
-        return {}
-    age = (time.time() - os.path.getmtime(CACHE)) / 3600
-    if age > CACHE_TTL_HOURS:
         return {}
     try:
         with open(CACHE, encoding="utf-8") as f:
@@ -102,18 +110,26 @@ def market_meta(condition_ids, cache):
     Tokens, question and end date per market.
 
     Gamma rejects a comma-joined list of condition_ids, so this goes one at a
-    time against the CLOB and caches the result - the metadata is static enough
-    that paying for it once every few hours is right.
+    time against the CLOB. The cache is committed to the repository precisely so
+    that CI only ever pays for markets it has not seen before - a cold run means
+    500 sequential lookups and a rate-limited, half-empty board.
     """
     missing = [c for c in condition_ids if c not in cache]
     if missing:
         sys.stderr.write(f"  {len(missing)} piac metaadata lekerese…\n")
 
         def one(cid):
-            try:
-                m = get_json(f"{CLOB}/markets/{cid}")
-            except (RuntimeError, json.JSONDecodeError):
-                return cid, None
+            # One call per market and 500 of them on a cold cache, so transient
+            # rate limiting is normal rather than exceptional. Without the retry
+            # a cold run lost about half the board.
+            m = None
+            for attempt in range(3):
+                try:
+                    m = get_json(f"{CLOB}/markets/{cid}")
+                    break
+                except (RuntimeError, json.JSONDecodeError):
+                    if attempt < 2:
+                        time.sleep(0.6 * (attempt + 1))
             if not m or "tokens" not in m:
                 return cid, None
             return cid, {
