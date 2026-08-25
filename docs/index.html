@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LP Scanner</title>
+<style>
+:root{
+  --void:#0B0E13; --panel:#121722; --sunk:#0D111A; --raise:#1A2130;
+  --line:#232C3D; --limb:#33405A;
+  --ink:#DCE3EE; --muted:#8A97AC; --faint:#5C687E;
+  --signal:#4ECDC4; --warn:#D2A03E; --danger:#E07A5F; --good:#5FA8A0;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --disp:"Inter",system-ui,-apple-system,sans-serif;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--void);color:var(--ink);font-family:var(--disp);font-size:14px;line-height:1.5}
+a{color:inherit}
+.wrap{max-width:1360px;margin:0 auto;padding:18px 20px 60px}
+
+header{display:flex;flex-wrap:wrap;align-items:baseline;gap:14px;border-bottom:1px solid var(--line);padding-bottom:14px}
+h1{font-size:1.05rem;font-weight:700;letter-spacing:.18em;text-transform:uppercase;margin:0}
+.sub{font-family:var(--mono);font-size:.72rem;color:var(--faint)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--signal);display:inline-block;margin-right:6px;vertical-align:middle}
+.dot.stale{background:var(--warn)}
+
+.stats{display:flex;flex-wrap:wrap;gap:26px;margin:16px 0 4px}
+.stat b{display:block;font-family:var(--mono);font-size:1.5rem;font-weight:600;letter-spacing:-.02em}
+.stat span{font-family:var(--disp);font-size:.6rem;text-transform:uppercase;letter-spacing:.16em;color:var(--faint)}
+
+.controls{display:flex;flex-wrap:wrap;align-items:center;gap:20px;margin:18px 0;padding:14px 16px;
+  background:var(--panel);border:1px solid var(--line);border-radius:4px}
+.ctl{display:flex;align-items:center;gap:9px}
+.ctl label{font-size:.62rem;text-transform:uppercase;letter-spacing:.16em;color:var(--faint);white-space:nowrap}
+input[type=number]{width:88px;background:var(--sunk);border:1px solid var(--line);color:var(--ink);
+  font-family:var(--mono);font-size:.82rem;padding:6px 9px;border-radius:3px}
+input[type=range]{width:130px;accent-color:var(--signal)}
+.val{font-family:var(--mono);font-size:.82rem;color:var(--signal);min-width:38px}
+.toggle{background:var(--panel);border:1px solid var(--line);color:var(--muted);font-family:var(--disp);
+  font-size:.64rem;font-weight:600;text-transform:uppercase;letter-spacing:.14em;padding:6px 12px;
+  border-radius:3px;cursor:pointer}
+.toggle[aria-pressed=true]{border-color:var(--signal);color:var(--signal)}
+
+h2{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.18em;color:var(--muted);
+  margin:30px 0 4px}
+h2 em{font-style:normal;color:var(--faint);font-weight:400;letter-spacing:.04em;text-transform:none;font-size:.78rem}
+.note{font-size:.78rem;color:var(--faint);margin:0 0 10px;max-width:76ch}
+
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:4px;background:var(--panel)}
+table{width:100%;border-collapse:collapse;font-size:.8rem}
+th{font-family:var(--disp);font-size:.6rem;font-weight:600;text-transform:uppercase;letter-spacing:.14em;
+  color:var(--muted);text-align:right;padding:9px 12px;border-bottom:1px solid var(--line);
+  white-space:nowrap;cursor:pointer;user-select:none}
+th:first-child{text-align:left}
+th:hover{color:var(--signal)}
+th[data-active]{color:var(--signal)}
+td{padding:7px 12px;border-bottom:1px solid var(--line);text-align:right;
+  font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+td:first-child{text-align:left;font-family:var(--disp);white-space:normal;min-width:270px}
+tr:hover td{background:var(--raise)}
+tr.dead td{opacity:.42}
+.q{color:var(--ink)}
+.flags{display:block;font-family:var(--mono);font-size:.66rem;color:var(--danger);margin-top:2px}
+.flags .soft{color:var(--faint)}
+.good{color:var(--good)} .warn{color:var(--warn)} .bad{color:var(--danger)} .faint{color:var(--faint)}
+.big{color:var(--signal);font-weight:600}
+footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);font-size:.76rem;color:var(--faint);max-width:80ch}
+footer p{margin:.5em 0}
+code{font-family:var(--mono);font-size:.9em;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>LP Scanner</h1>
+  <div class="sub"><span class="dot" id="dot"></span><span id="stamp">betöltés…</span></div>
+  <div class="sub" style="margin-left:auto">Polymarket liquidity rewards</div>
+</header>
+
+<div class="stats">
+  <div class="stat"><b id="s-markets">—</b><span>jutalmazott piac</span></div>
+  <div class="stat"><b id="s-pool">—</b><span>napi keret</span></div>
+  <div class="stat"><b id="s-contested">—</b><span>versengő</span></div>
+  <div class="stat"><b id="s-empty">—</b><span>üres könyv</span></div>
+</div>
+
+<div class="controls">
+  <div class="ctl"><label for="size">méret (részvény)</label><input type="number" id="size" value="100" min="1" step="10"></div>
+  <div class="ctl"><label for="dist">távolság a középártól</label>
+    <input type="range" id="dist" min="0" max="5" step="0.5" value="1"><span class="val" id="dist-v">1.0c</span></div>
+  <div class="ctl"><label for="vol">max volatilitás</label>
+    <input type="range" id="vol" min="0" max="12" step="0.5" value="12"><span class="val" id="vol-v">bármi</span></div>
+  <button class="toggle" id="hide-flagged" aria-pressed="false">Jelzettek elrejtése</button>
+</div>
+
+<h2>Versengő piacok <em>— mások is állnak itt, a hozam elhihetőbb</em></h2>
+<p class="note">A verseny pontszáma valós. Ha ez a szám nagy, a hozamod kicsi lesz, de a piac
+  létezik és mások szerint is kereskedhető.</p>
+<div class="tablewrap"><table id="t-contested"><thead></thead><tbody></tbody></table></div>
+
+<h2>Üres könyvű piacok <em>— rajtad kívül senki nincs ott</em></h2>
+<p class="note">A hozam itt azért csillagászati, mert a jutalomsávban nincs más megbízás. Minden
+  eddigi mérésnél ezek voltak a legvolatilisebb piacok is: a jutalom nem ingyenebéd, hanem fizetség
+  azért, hogy a pihenő megbízásodon átgázolnak. Nézd a <code>vol</code> oszlopot, mielőtt bármit ideteszel.</p>
+<div class="tablewrap"><table id="t-empty"><thead></thead><tbody></tbody></table></div>
+
+<footer>
+  <p><b>A számok a te méretedre.</b> A jutalom pontszám-arányosan oszlik, tehát a saját méreted a
+  nevezőben van — ezért a hozam a méret növelésével esik. Állítsd a fenti mezőt, és minden újraszámolódik.</p>
+  <p><b>Kapacitás</b> = mennyi dollárt bír el a piac, mielőtt a hozam 1%/nap alá hígul. Ez mondja meg,
+  érdemes-e egyáltalán foglalkozni vele: 250%/nap huszonöt dolláron nem üzlet.</p>
+  <p><b>Pontozás:</b> <code>S(v,s) = ((v−s)/v)² × méret</code> — négyzetes, tehát a sáv szélén álló
+  megbízás szinte nem számít. A középártól 1 centre a pontszám 67%-a, 4 centre 7%-a.
+  A 0.10 alatti és 0.90 fölötti középárnál <b>kötelező a kétoldalas jegyzés</b>, ami duplázza a lekötött tőkét.</p>
+  <p>Az adat percenként mintavételezett jutalom-pontozásra épül, ezért a néhány perces frissítés nem korlát.
+  <a href="https://github.com/BOOST250/lp-scanner">Forrás és módszertan</a>.</p>
+</footer>
+</div>
+
+<script>
+const COLS=[
+ {k:'question',l:'Piac',t:'q'},
+ {k:'daily_usd',l:'napi $',t:'usd'},
+ {k:'daily_yield',l:'hozam/nap',t:'pct'},
+ {k:'capacity',l:'kapacitás',t:'cap'},
+ {k:'existing_score',l:'verseny',t:'num'},
+ {k:'vol_c',l:'vol',t:'vol'},
+ {k:'mid',l:'közép',t:'mid'},
+ {k:'rate',l:'keret/nap',t:'usd0'},
+ {k:'hours_left',l:'zár',t:'hrs'},
+];
+let STATE=null, sort={contested:{k:'daily_yield',d:-1},empty:{k:'daily_yield',d:-1}}, hideFlagged=false;
+
+const $=s=>document.querySelector(s);
+const fmtUsd=v=>v>=1000?'$'+(v/1000).toFixed(1)+'k':'$'+v.toFixed(v<10?2:0);
+const fmtNum=v=>v>=1000?(v/1000).toFixed(1)+'k':Math.round(v).toString();
+
+/* Mirror of scoring.py. Kept deliberately small so the two cannot drift:
+   score is quadratic in distance, one side scores at a third in the middle
+   band and nothing at the extremes, and my own size dilutes my own share. */
+const ONE_SIDED=3.0, MIN_PAYOUT=1.0;
+function recompute(r,size,dist){
+  const v=r.max_spread, mid=r.mid, two=r.two_sided;
+  const w=(v>0&&dist<=v)?Math.pow((v-dist)/v,2):0;
+  let mine=w*size;
+  if(!two) mine=Math.max(0,mine/ONE_SIDED);      // one side only, penalised
+  const perShare=mid*(two?2:1);
+  const capital=size*perShare;
+  let share=0,reward=0;
+  if(mine>0){ share=mine/(r.existing_score+mine); reward=r.rate*share; if(reward<MIN_PAYOUT) reward=0; }
+  // capacity: size at which yield falls to 1%/day
+  const target=0.01; let cap=0;
+  if(w>0&&perShare>0){
+    const denom=target*perShare*w;
+    const n=(r.rate*w-target*perShare*r.existing_score)/denom;
+    cap=Math.max(0,n*perShare);
+  }
+  return {...r, daily_usd:+reward.toFixed(2), daily_yield:capital?reward/capital:0,
+          capital:+capital.toFixed(2), capacity:+cap.toFixed(0), my_share:share,
+          below_min_size:size<(r.min_size||0)};
+}
+function flagsFor(r){
+  const f=[];
+  if(r.existing_score<50) f.push(['üres könyv',0]);
+  if(r.hours_left!=null&&r.hours_left<24) f.push([Math.round(r.hours_left)+'h múlva zár',0]);
+  if(r.vol_c!=null&&r.vol_c>2) f.push(['volatilis '+r.vol_c.toFixed(1)+'c/h',1]);
+  if(r.two_sided) f.push(['két oldal kell',0]);
+  if(r.below_min_size) f.push(['méret < minimum '+r.min_size,1]);
+  if(r.daily_usd===0) f.push(['<$1, nem fizet',1]);
+  return f;
+}
+function cell(r,c){
+  const v=r[c.k];
+  switch(c.t){
+    case 'q':{
+      const fl=r._flags.map(([t,hard])=>`<span class="${hard?'':'soft'}">${t}</span>`).join(' · ');
+      return `<span class="q">${r.question}</span>${fl?`<span class="flags">${fl}</span>`:''}`;
+    }
+    case 'usd': return r.daily_usd?fmtUsd(r.daily_usd):'<span class="faint">—</span>';
+    case 'usd0': return '$'+Math.round(v);
+    case 'pct':{
+      const p=v*100; const cls=p>=5?'big':p>=1?'good':'faint';
+      return `<span class="${cls}">${p.toFixed(p<1?2:1)}%</span>`;
+    }
+    case 'cap': return v>0?fmtUsd(v):'<span class="faint">—</span>';
+    case 'num': return fmtNum(v);
+    case 'vol':{
+      if(v==null) return '<span class="faint">—</span>';
+      const cls=v>4?'bad':v>2?'warn':'good';
+      return `<span class="${cls}">${v.toFixed(1)}c</span>`;
+    }
+    case 'mid': return (v*100).toFixed(1)+'c';
+    case 'hrs':{
+      if(v==null) return '<span class="faint">—</span>';
+      if(v<24) return `<span class="warn">${Math.round(v)}h</span>`;
+      if(v<24*60) return Math.round(v/24)+'d';
+      return Math.round(v/24/30)+'hó';
+    }
+  }
+}
+function renderTable(id,rows,key){
+  const t=$('#'+id), s=sort[key];
+  t.querySelector('thead').innerHTML='<tr>'+COLS.map(c=>
+    `<th data-k="${c.k}" data-key="${key}"${s.k===c.k?' data-active':''}>${c.l}${s.k===c.k?(s.d<0?' ↓':' ↑'):''}</th>`).join('')+'</tr>';
+  const sorted=rows.slice().sort((a,b)=>{
+    const x=a[s.k],y=b[s.k];
+    if(typeof x==='string') return String(x).localeCompare(String(y))*s.d;
+    const xa=x==null?-Infinity:x, ya=y==null?-Infinity:y;
+    return (xa-ya)*s.d;
+  });
+  t.querySelector('tbody').innerHTML=sorted.length?sorted.map(r=>
+    `<tr class="${r.daily_usd?'':'dead'}">`+COLS.map(c=>`<td>${cell(r,c)}</td>`).join('')+'</tr>').join('')
+    :`<tr><td colspan="${COLS.length}" style="text-align:center;color:var(--faint);padding:30px">Egy sor sem felel meg a szűrőnek.</td></tr>`;
+}
+function render(){
+  if(!STATE) return;
+  const size=Math.max(1,+$('#size').value||100), dist=+$('#dist').value, volMax=+$('#vol').value;
+  $('#dist-v').textContent=dist.toFixed(1)+'c';
+  $('#vol-v').textContent=volMax>=12?'bármi':volMax.toFixed(1)+'c';
+
+  let rows=STATE.rows.map(r=>{const x=recompute(r,size,dist); x._flags=flagsFor(x); return x;});
+  if(volMax<12) rows=rows.filter(r=>r.vol_c==null||r.vol_c<=volMax);
+  if(hideFlagged) rows=rows.filter(r=>r._flags.length===0);
+
+  const contested=rows.filter(r=>r.existing_score>=50);
+  const empty=rows.filter(r=>r.existing_score<50);
+  $('#s-markets').textContent=STATE.rows.length;
+  $('#s-pool').textContent='$'+Math.round(STATE.rows.reduce((a,r)=>a+r.rate,0)).toLocaleString();
+  $('#s-contested').textContent=contested.length;
+  $('#s-empty').textContent=empty.length;
+  renderTable('t-contested',contested,'contested');
+  renderTable('t-empty',empty,'empty');
+}
+document.addEventListener('click',e=>{
+  const th=e.target.closest('th[data-k]'); if(!th) return;
+  const key=th.dataset.key, k=th.dataset.k;
+  sort[key]= sort[key].k===k?{k,d:-sort[key].d}:{k,d:-1};
+  render();
+});
+['size','dist','vol'].forEach(id=>$('#'+id).addEventListener('input',render));
+$('#hide-flagged').addEventListener('click',e=>{
+  hideFlagged=!hideFlagged; e.target.setAttribute('aria-pressed',hideFlagged); render();
+});
+
+async function load(){
+  try{
+    const r=await fetch('data/state.json?t='+Date.now());
+    if(!r.ok) throw new Error(r.status);
+    STATE=await r.json();
+    const at=new Date(STATE.at), age=(Date.now()-at)/60000;
+    $('#stamp').textContent=at.toISOString().slice(0,16).replace('T',' ')+' UTC · '+
+      (age<1?'most':Math.round(age)+' perce');
+    $('#dot').className='dot'+(age>25?' stale':'');
+    if($('#size').value==100&&STATE.size) $('#size').value=STATE.size;
+    render();
+  }catch(e){ $('#stamp').textContent='nem sikerült betölteni ('+e.message+')'; $('#dot').className='dot stale'; }
+}
+load(); setInterval(load,60000);
+</script>
+</body>
+</html>

@@ -1,0 +1,67 @@
+name: scan
+
+# Every 10 minutes. GitHub's scheduler is best-effort and skips runs under load,
+# so a 5-minute cron in practice delivers roughly this anyway - asking for less
+# than the scheduler can keep produces gaps rather than freshness.
+#
+# The cadence is not the binding constraint: reward scores are sampled once a
+# minute and the decision this feeds is "where should capital rest for hours",
+# so state a few minutes old is as good as live.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [docs/**, scanner.py, scoring.py, .github/workflows/scan.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Scan
+        env:
+          # No tunnel on GitHub's runners and none needed: they are not on a
+          # network that resets the Polymarket TLS handshake. Empty makes
+          # curl_args drop the SOCKS flag entirely - passing an empty proxy host
+          # fails in a way that looks like a network fault rather than a config one.
+          POLYMARKET_PROXY_URL: ""
+        run: python scanner.py --size 100
+
+      - name: Sanity check
+        run: |
+          python - <<'PY'
+          import json, sys
+          s = json.load(open("docs/data/state.json", encoding="utf-8"))
+          rows = s["rows"]
+          scored = [r for r in rows if r["existing_score"] > 0]
+          print(f"{len(rows)} markets, {len(scored)} with a scoring book")
+          # A partial scan is worse than a stale one: it would quietly empty the
+          # board and make every market look uncontested.
+          if len(rows) < 100:
+              sys.exit(f"only {len(rows)} markets - refusing to publish a partial scan")
+          if len(scored) < 5:
+              sys.exit("almost nothing has a scoring book - books probably failed to fetch")
+          PY
+
+      - name: Commit if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/data/state.json
+          git diff --staged --quiet && echo "no change" && exit 0
+          git commit -m "scan: $(date -u '+%Y-%m-%d %H:%M') UTC"
+          git push
