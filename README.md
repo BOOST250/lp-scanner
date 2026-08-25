@@ -135,7 +135,7 @@ verified by test, not asserted.
 Prefer pointing at the file you already have rather than making a copy:
 
 ```bash
-set POLY_ENV_FILE=C:\path	o\your\.env
+set POLY_ENV_FILE=C:\Users\you\projects\yourapp\.env
 ```
 
 Two copies of a secret is two places it can leak, and they drift apart the first
