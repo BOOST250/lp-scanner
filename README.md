@@ -114,10 +114,27 @@ Open orders are private — the CLOB wants L2 authentication (API key, passphras
 HMAC-SHA256 over `<timestamp><METHOD><path>`) and offers no read-only mode. A
 public GitHub Pages site cannot hold those credentials, and neither should a
 browser's localStorage on a public origin. So this runs on your machine, reads
-`POLY_API_KEY`, `POLY_API_SECRET`, `POLY_PASSPHRASE` and `POLY_ADDRESS` from the
-environment, and serves the result on `http://127.0.0.1:8787/orders.json`. The
-dashboard reads that if it is running. **The keys never leave your machine, never
-enter the repository, and this script never prints them.**
+`POLY_API_KEY`, `POLY_API_SECRET`, `POLY_PASSPHRASE` and `POLY_ADDRESS`, and
+serves the result on `http://127.0.0.1:8787/orders.json`. The dashboard reads
+that if it is running. **The keys never leave your machine, never enter the
+repository, and this script never prints them** — not even truncated, since a
+prefix still narrows a brute force.
+
+Credentials are read from the environment first, then from a file. Prefer
+pointing at the file you already have rather than making a copy:
+
+```bash
+set POLY_ENV_FILE=C:\path	o\your\.env
+```
+
+Two copies of a secret is two places it can leak, and they drift apart the first
+time you rotate one. If you would rather keep them here, copy `.env.example` to
+`.env` — `.gitignore` excludes `.env` and `.env.*`, and that is verified, not
+assumed.
+
+An authentication failure prints what to check — secret not base64, address not
+matching the key, revoked credentials, clock skew — and never echoes a value
+back.
 
 ### The math is not the scanner's math
 

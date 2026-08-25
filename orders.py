@@ -65,20 +65,88 @@ import scoring
 
 CLOB = "https://clob.polymarket.com"
 PROXY = os.environ.get("POLYMARKET_PROXY_URL", "socks5://127.0.0.1:40000")
+HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("LP_ORDERS_PORT", "8787"))
 REFRESH_SECONDS = 30
 
 CREDS = ("POLY_API_KEY", "POLY_API_SECRET", "POLY_PASSPHRASE", "POLY_ADDRESS")
 
 
+def load_env_file(path):
+    """
+    Read KEY=value lines into the environment, without overwriting what is
+    already set there.
+
+    This exists so the credentials can stay in ONE file. Copying them into a
+    second location doubles the number of places that can leak, and the copies
+    drift apart when you rotate. Point POLY_ENV_FILE at the file you already
+    have and nothing new is written to disk.
+
+    Values are never printed - not by this function, not by anything downstream.
+    """
+    found = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip().strip('"').strip("'")
+                if k in CREDS and v and not os.environ.get(k):
+                    os.environ[k] = v
+                    found.append(k)
+    except OSError as e:
+        sys.exit(f"Nem olvashato: {path} ({e.strerror})")
+    return found
+
+
 def creds():
+    # env vars win; a file is the fallback so the secrets can live in one place
+    env_file = os.environ.get("POLY_ENV_FILE") or os.path.join(HERE, ".env")
+    if any(not os.environ.get(c) for c in CREDS) and os.path.exists(env_file):
+        got = load_env_file(env_file)
+        if got:
+            print(f"  {len(got)} kulcs betoltve innen: {env_file}")
+            print(f"  (nevek: {', '.join(got)} — az ertekek nem jelennek meg sehol)")
+
     missing = [c for c in CREDS if not os.environ.get(c)]
     if missing:
         sys.exit(
-            "Hianyzo kornyezeti valtozok: " + ", ".join(missing) + "\n"
-            "Allitsd be oket a gepeden; ez a szkript soha nem irja ki az erteküket."
+            "Hianyzo ertekek: " + ", ".join(missing) + "\n\n"
+            "Ket lehetoseg, mindketto a te gepeden marad:\n"
+            f"  1) mutass ra a meglevo fajlodra:  set POLY_ENV_FILE=<utvonal>\\.env\n"
+            f"  2) vagy tedd oket ide:            {env_file}\n\n"
+            "A fajlban KULCS=ertek soronkent. Ez a szkript soha nem irja ki az ertekeket."
         )
     return {c: os.environ[c] for c in CREDS}
+
+
+def explain(err):
+    """
+    Turn an upstream failure into something actionable, without ever echoing a
+    credential back - not even a truncated one, since a prefix still narrows a
+    brute force.
+    """
+    msg = str(err)
+    if "Unauthorized" in msg or "Invalid api key" in msg:
+        return (
+            "A CLOB elutasitotta a hitelesitest.\n\n"
+            "Gyakori okok, sorrendben:\n"
+            "  - a POLY_API_SECRET nem base64 (a szkript base64-kent dekodolja)\n"
+            "  - a POLY_ADDRESS nem ahhoz a kulcshoz tartozik\n"
+            "  - a kulcs mas kornyezethez keszult, vagy visszavontad\n"
+            "  - a gep oraja elcsuszott: az alairas idobelyeget a szerver ellenorzi\n\n"
+            "Az ertekeket sem ez a szkript, sem a hibauzenet nem irja ki."
+        )
+    if "ures valasz" in msg or "timed out" in msg:
+        return (
+            "Nem jott valasz a Polymarkettol.\n"
+            "Fut a SOCKS alagut? A magyar szolgaltatok a TLS kezfogasnal dobjak a *.polymarket.com SNI-t.\n"
+            "  POLYMARKET_PROXY_URL=" + (PROXY or "(nincs beallitva)")
+        )
+    return f"Lekeres sikertelen: {msg}"
 
 
 def l2_headers(c, method, path):
@@ -294,7 +362,10 @@ def main():
     c = creds()
 
     if not args.watch:
-        show(analyse(c))
+        try:
+            show(analyse(c))
+        except RuntimeError as e:
+            sys.exit(explain(e))
         return
 
     srv = HTTPServer(("127.0.0.1", PORT), Handler)
