@@ -1,0 +1,9 @@
+# Minimal config: this repository deploys one Edge Function and nothing else.
+# The full generated config that `supabase init` writes is for local development
+# of a whole project - database, auth, storage - none of which exists here.
+project_id = "lp-scanner"
+
+[functions.pm]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/pm/index.ts"

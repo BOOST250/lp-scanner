@@ -80,6 +80,14 @@ tr.open td{background:var(--raise)}
   font-size:.79rem;color:var(--muted);margin:14px 0;border-radius:0 3px 3px 0;max-width:86ch}
 .warnbox b{color:var(--warn)}
 
+input[type=text]{width:340px;background:var(--sunk);border:1px solid var(--line);color:var(--ink);
+  font-family:var(--mono);font-size:.78rem;padding:6px 9px;border-radius:3px}
+.loadbtn{background:var(--panel);border:1px solid var(--signal);color:var(--signal);font-family:var(--disp);
+  font-size:.64rem;font-weight:600;text-transform:uppercase;letter-spacing:.14em;padding:6px 13px;
+  border-radius:3px;cursor:pointer}
+.loadbtn:disabled{opacity:.45;cursor:default}
+.perh{font-size:.62rem;text-transform:uppercase;letter-spacing:.16em;color:var(--faint);margin:26px 0 9px}
+.pos{color:var(--good)} .neg{color:var(--danger)}
 footer{margin-top:36px;padding-top:16px;border-top:1px solid var(--line);font-size:.76rem;color:var(--faint);max-width:82ch}
 footer p{margin:.6em 0}
 code{font-family:var(--mono);font-size:.9em;color:var(--muted)}
@@ -105,6 +113,7 @@ a{color:var(--muted)}
 <nav>
   <button data-v="signals" aria-current="page">Jelzések</button>
   <button data-v="plan">Allokáció</button>
+  <button data-v="pos">Pozícióim</button>
 </nav>
 
 <div class="controls">
@@ -115,6 +124,9 @@ a{color:var(--muted)}
     <input type="range" id="vol" min="0.5" max="12" step="0.5" value="2"><span class="val" id="vol-v">2.0c/h</span></div>
   <div class="ctl" id="ctl-budget" hidden><label for="budget">keret ($)</label><input type="number" id="budget" value="2000" min="50" step="100"></div>
   <div class="ctl" id="ctl-max" hidden><label for="maxm">max piac</label><input type="number" id="maxm" value="20" min="1" max="80" step="1"></div>
+  <div class="ctl" id="ctl-addr" hidden><label for="addr">tárcacím</label>
+    <input type="text" id="addr" placeholder="0x…" spellcheck="false" autocomplete="off">
+    <button class="loadbtn" id="loadpos">Betölt</button></div>
 </div>
 
 <section id="v-signals">
@@ -140,6 +152,25 @@ a{color:var(--muted)}
   <div class="tablewrap"><table id="t-plan"><thead></thead><tbody></tbody></table></div>
 </section>
 
+<section id="v-pos" hidden>
+  <p class="note">A tárcacímed <b>a böngésződben marad</b> (<code>localStorage</code>) — nem kerül a repóba,
+    és más látogató nem látja. A lekérés a saját Supabase-relayeden megy át, mert a Polymarket adat-végpontja
+    magyar hálózatról blokkolt.</p>
+  <div class="plan" id="pos-stats" hidden>
+    <div class="stat"><b id="q-net">—</b><span>nettó eredmény</span></div>
+    <div class="stat"><b id="q-spread">—</b><span>spread-fogás</span></div>
+    <div class="stat"><b id="q-inv">—</b><span>készlet (nem realizált)</span></div>
+    <div class="stat"><b id="q-fees">—</b><span>fizetett díj</span></div>
+    <div class="stat"><b id="q-mk5">—</b><span>markout 5 perc</span></div>
+    <div class="stat"><b id="q-mk30">—</b><span>markout 30 perc</span></div>
+  </div>
+  <div class="warnbox" id="pos-warn" hidden></div>
+  <div id="pos-empty" class="note">Írd be a tárcacímed, és nyomd meg a Betölt gombot.</div>
+  <div class="tablewrap" id="pos-wrap" hidden><table id="t-pos"><thead></thead><tbody></tbody></table></div>
+  <h3 class="perh" id="per-h" hidden>Időbeli bontás</h3>
+  <div class="tablewrap" id="per-wrap" hidden><table id="t-per"><thead></thead><tbody></tbody></table></div>
+</section>
+
 <footer>
   <p><b>A hozam a te méretedre szól.</b> A jutalom pontszám-arányosan oszlik, tehát a saját méreted a
   nevezőben van. Állítsd a méretet, és minden újraszámolódik.</p>
@@ -156,8 +187,9 @@ a{color:var(--muted)}
 
 <script type="module">
 import { recompute, allocate, flagsFor, minStake, orderScore, myScore, capitalPerShare } from './lp.js';
+import { analyse, byPeriod, MARKOUTS } from './positions.js';
 
-let STATE = null, HIST = null, view = 'signals', openCid = null;
+let STATE = null, HIST = null, view = 'signals', openCid = null, ACCOUNT = null;
 let sort = { k: 'daily_usd', d: -1 };
 const $ = s => document.querySelector(s);
 const usd = v => v >= 1000 ? '$' + (v / 1000).toFixed(1) + 'k' : '$' + v.toFixed(v < 10 ? 2 : 0);
@@ -331,6 +363,7 @@ function render() {
   $('#s-eligible').textContent = rows.length;
   $('#s-paying').textContent = rows.filter(r => r.daily_usd > 0).length;
 
+  if (view === 'pos') return;
   if (view === 'signals') {
     const sorted = rows.slice().sort((a, b) => {
       const x = a[sort.k], y = b[sort.k];
@@ -372,8 +405,10 @@ document.addEventListener('click', e => {
     document.querySelectorAll('nav button').forEach(b => b.toggleAttribute('aria-current', b === nb));
     $('#v-signals').hidden = view !== 'signals';
     $('#v-plan').hidden = view !== 'plan';
+    $('#v-pos').hidden = view !== 'pos';
     $('#ctl-budget').hidden = view !== 'plan';
     $('#ctl-max').hidden = view !== 'plan';
+    $('#ctl-addr').hidden = view !== 'pos';
     render();
     return;
   }
@@ -386,6 +421,99 @@ document.addEventListener('click', e => {
   }
 });
 ['size', 'dist', 'vol', 'budget', 'maxm'].forEach(id => $('#' + id).addEventListener('input', render));
+$('#loadpos').addEventListener('click', loadPositions);
+$('#addr').addEventListener('keydown', e => { if (e.key === 'Enter') loadPositions(); });
+$('#addr').value = localStorage.getItem('lp.addr') || '';
+
+
+/* ---- Pozíciók ------------------------------------------------------------ */
+
+const money = v => (v < 0 ? '−' : '') + '$' + Math.abs(v).toFixed(Math.abs(v) < 100 ? 2 : 0);
+const signed = v => `<span class="${v >= 0 ? 'pos' : 'neg'}">${money(v)}</span>`;
+const when = t => new Date(t * 1000).toISOString().slice(5, 16).replace('T', ' ');
+
+function renderPositions() {
+  if (!ACCOUNT) return;
+  const { markets, perFill, totals } = ACCOUNT;
+  $('#pos-empty').hidden = true;
+  $('#pos-stats').hidden = false;
+  $('#pos-wrap').hidden = false;
+  $('#per-h').hidden = false;
+  $('#per-wrap').hidden = false;
+
+  $('#q-net').innerHTML = signed(totals.net);
+  $('#q-spread').innerHTML = signed(totals.spread);
+  $('#q-inv').innerHTML = signed(totals.inventory);
+  $('#q-fees').textContent = money(totals.fees);
+  for (const m of MARKOUTS) {
+    const mk = totals.markout[m];
+    $('#q-mk' + m).innerHTML = mk.n ? signed(mk.sum) : '<span class="faint">—</span>';
+  }
+
+  /* The markout is the reading that matters, so it gets said in words rather
+     than left as a number the reader has to interpret. */
+  const msgs = [];
+  const mk30 = totals.markout[30];
+  if (mk30.n >= 10) {
+    const per = mk30.sum / mk30.n;
+    if (mk30.sum < 0)
+      msgs.push(`<b>A markout negatív: ${money(mk30.sum)} ${mk30.n} fillen</b> (${money(per)} fillenként). A középár rendszeresen ellened mozdul a kötéseid után — ez kontraszelekció, és a jutalom ezt hivatott fedezni. Ha a jutalom kevesebb, mint ez, a market making veszteséges, akármit mutat a nettó eredmény.`);
+    else
+      msgs.push(`<b>A markout pozitív: ${money(mk30.sum)} ${mk30.n} fillen.</b> A kötéseid után a középár átlagosan feléd mozdul, tehát nem szednek ki — ez a market making egészséges jele.`);
+  } else {
+    msgs.push(`Még csak ${mk30.n} fillre van markout-adat. Tíz alatt ez zaj, nem jel.`);
+  }
+  if (totals.spread !== 0 && totals.inventory !== 0 && Math.abs(totals.inventory) > Math.abs(totals.spread))
+    msgs.push(`<b>Az eredményed nagyobb részét a készlet mozgása adja, nem a spread-fogás.</b> Ez irányfogadás, nem market making — más kockázat, és nem attól függ, hogy jól jegyzel-e.`);
+  if (totals.marketsMarked < totals.marketsTotal)
+    msgs.push(`A markout a legtöbbet kereskedett <b>${totals.marketsMarked} piacot</b> fedi le a ${totals.marketsTotal}-ból — piaconként egy lekérés, ezért van korlát. A többi piac fillei kimaradnak belőle, a spread és a készlet viszont mindre számolódik.`);
+  msgs.push(`A <b>jutalom-kifizetés nincs ebben a számban</b> — ahhoz aláírt hitelesítés kellene, amit a relay szándékosan nem tud. Add hozzá kézzel, mielőtt eldöntöd, hogy megéri-e.`);
+  $('#pos-warn').innerHTML = msgs.join('<br><br>');
+  $('#pos-warn').hidden = false;
+
+  const cols = ['Piac', 'kötés', 'forgalom', 'spread', 'készlet', 'díj', 'markout 30p', 'nyitva', 'átlag→most'];
+  $('#t-pos').querySelector('thead').innerHTML =
+    '<tr>' + cols.map((c, i) => `<th${i === 0 ? '' : ''}>${c}</th>`).join('') + '</tr>';
+  $('#t-pos').querySelector('tbody').innerHTML = markets.map(m => `<tr>
+    <td>${m.title || m.asset.slice(0, 12)}<span class="flags"><span class="s">${m.outcome || ''}</span></span></td>
+    <td>${m.fills}</td><td>${money(m.volume)}</td>
+    <td>${signed(m.spread)}</td><td>${signed(m.unrealised)}</td><td>${money(m.fees)}</td>
+    <td>${m.markout[30] != null ? signed(m.markout[30]) : '<span class="faint">—</span>'}</td>
+    <td>${Math.abs(m.open) < 1e-6 ? '<span class="faint">zárva</span>' : Math.round(m.open)}</td>
+    <td>${m.cur != null ? (m.avg * 100).toFixed(1) + '→' + (m.cur * 100).toFixed(1) + 'c' : '<span class="faint">—</span>'}</td>
+  </tr>`).join('');
+
+  const secs = +($('#pergrain') ? $('#pergrain').value : 3600);
+  const rows = byPeriod(perFill, secs).slice(0, 24);
+  $('#t-per').querySelector('thead').innerHTML =
+    '<tr><th>időszak</th><th>kötés</th><th>forgalom</th>' +
+    MARKOUTS.map(m => `<th>markout ${m}p</th>`).join('') + '</tr>';
+  $('#t-per').querySelector('tbody').innerHTML = rows.map(b => `<tr>
+    <td>${when(b.t)}</td><td>${b.fills}</td><td>${money(b.volume)}</td>
+    ${MARKOUTS.map(m => `<td>${b.markout[m] != null ? signed(b.markout[m]) : '<span class="faint">—</span>'}</td>`).join('')}
+  </tr>`).join('') || `<tr><td colspan="5" style="text-align:center;color:var(--faint);padding:26px">nincs kötés</td></tr>`;
+}
+
+async function loadPositions() {
+  const addr = $('#addr').value.trim();
+  if (!/^0x[a-fA-F0-9]{40}$/.test(addr)) {
+    $('#pos-empty').hidden = false;
+    $('#pos-empty').textContent = 'Ez nem érvényes cím — 0x és 40 hexadecimális jegy.';
+    return;
+  }
+  localStorage.setItem('lp.addr', addr);
+  const btn = $('#loadpos');
+  btn.disabled = true; btn.textContent = 'Betöltés…';
+  try {
+    ACCOUNT = await analyse(addr);
+    renderPositions();
+  } catch (e) {
+    $('#pos-empty').hidden = false;
+    $('#pos-empty').textContent = 'Nem sikerült betölteni: ' + e.message;
+  } finally {
+    btn.disabled = false; btn.textContent = 'Betölt';
+  }
+}
 
 async function load() {
   try {

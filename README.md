@@ -20,6 +20,11 @@ Two views:
 - **Allokáció** — give it a bankroll and a risk tolerance and it says *what goes
   where*, with the daily total, the blended yield, and how many resting orders
   that means. Twenty markets is forty orders, re-quoted as the mids move.
+- **Pozícióim** — your own fills, decomposed. Enter a wallet address and it
+  separates spread capture from inventory drift and measures **markout**: where
+  the mid went 5 and 30 minutes after each of your fills. That is the number the
+  scanner cannot produce and the only one that settles whether the rewards are
+  covering what adverse selection costs you.
 
 **Change the size or the bankroll and every number recomputes in the browser.**
 `docs/lp.js` mirrors `scoring.py`, so the page answers instantly instead of
@@ -37,9 +42,22 @@ Needs the SOCKS tunnel (`POLYMARKET_PROXY_URL`, default
 `*.polymarket.com` SNI. Set it empty on an unfiltered network. stdlib plus curl,
 no dependencies.
 
-**No API credentials.** Everything here is public. Credentials would only add two
-things — your open orders and your actual reward payouts — and both belong to the
-retrospective half of the project, which this is not.
+**No API credentials, anywhere.** Everything used is public: a wallet address is
+an identifier, not a secret. Signed L2 authentication would add two things — your
+open orders and your actual reward payouts — and the relay deliberately cannot
+perform it, because a relay that never receives keys cannot leak them. Add reward
+payouts by hand before judging whether the whole thing pays.
+
+**Your address never leaves your browser.** It lives in `localStorage`, is never
+committed, and no other visitor to the page sees anything of yours. What is
+public here is the code, not your positions.
+
+Position data is fetched through `supabase/functions/pm`, a read-only relay
+restricted to four public paths. It exists for the same reason as everything else
+awkward in this repo: `data-api.polymarket.com` answers with
+`Access-Control-Allow-Origin: *` but returns HTTP 000 from a Hungarian network,
+so without the relay the published dashboard would work for everyone except its
+owner.
 
 ---
 
