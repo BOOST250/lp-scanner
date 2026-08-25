@@ -67,7 +67,12 @@ CLOB = "https://clob.polymarket.com"
 PROXY = os.environ.get("POLYMARKET_PROXY_URL", "socks5://127.0.0.1:40000")
 HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("LP_ORDERS_PORT", "8787"))
-REFRESH_SECONDS = 30
+REFRESH_SECONDS = 15
+# Reward rates and bands change on the order of days; the book changes constantly.
+# Paging all ~16,500 configs takes about 50 seconds, which was the entire reason a
+# "30 second" refresh actually took 98 - so they are cached and the loop spends its
+# time on the thing that moves.
+CONFIG_TTL = 600
 
 CREDS = ("POLY_API_KEY", "POLY_API_SECRET", "POLY_PASSPHRASE", "POLY_ADDRESS")
 
@@ -255,7 +260,10 @@ def market_names(need=None):
     return names
 
 
-def reward_configs():
+_cfg_cache = {"at": 0.0, "data": None}
+
+
+def reward_configs(max_age=CONFIG_TTL):
     """
     Every reward market, keyed by condition_id.
 
@@ -264,6 +272,9 @@ def reward_configs():
     properly finds about 6,000, and the difference is why this tool first
     reported live orders as earning nothing.
     """
+    if _cfg_cache["data"] is not None and time.time() - _cfg_cache["at"] < max_age:
+        return _cfg_cache["data"]
+
     out, cursor, seen = {}, "", set()
     while True:
         url = f"{CLOB}/rewards/markets/current?limit=500"
@@ -280,6 +291,7 @@ def reward_configs():
         if not cursor or cursor == "LTE=" or cursor in seen:
             break
         seen.add(cursor)
+    _cfg_cache.update(at=time.time(), data=out)
     return out
 
 

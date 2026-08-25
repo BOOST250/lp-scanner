@@ -128,8 +128,14 @@ answer to "why is nobody else here".
 
 ```bash
 python orders.py            # print once
-python orders.py --watch    # refresh every 30s, serve to the dashboard
+python orders.py --watch    # refresh every ~17s, serve the dashboard too
 ```
+
+Reward rates and bands change on the order of days; the book changes constantly.
+Paging all ~16,500 reward configs takes about 50 seconds, which is why a
+"30 second" refresh actually took 98 — so the configs are cached for ten minutes
+and each cycle spends its time on the thing that moves. The browser re-reads
+`orders.json` every 15 seconds while the orders view is open.
 
 Open orders are private — the CLOB wants L2 authentication (API key, passphrase,
 HMAC-SHA256 over `<timestamp><METHOD><path>`) and offers no read-only mode. A
