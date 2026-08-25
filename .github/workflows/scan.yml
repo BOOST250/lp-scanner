@@ -58,13 +58,23 @@ jobs:
               sys.exit(f"only {len(rows)} markets - refusing to publish a partial scan")
           if len(scored) < 5:
               sys.exit("almost nothing has a scoring book - books probably failed to fetch")
+
+          # The history is append-only; a shorter file means data was dropped,
+          # not refreshed, and publishing it would erase a week of competition.
+          import os
+          hp = "docs/data/history.json"
+          if os.path.exists(hp):
+              h = json.load(open(hp, encoding="utf-8"))
+              print(f"{len(h)} history series")
+              if len(h) < len(rows) * 0.5:
+                  sys.exit(f"history has {len(h)} series for {len(rows)} markets - looks truncated")
           PY
 
       - name: Commit if changed
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/data/state.json markets_cache.json
+          git add docs/data/state.json docs/data/history.json markets_cache.json
           git diff --staged --quiet && echo "no change" && exit 0
           git commit -m "scan: $(date -u '+%Y-%m-%d %H:%M') UTC"
 

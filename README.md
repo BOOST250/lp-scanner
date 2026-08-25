@@ -10,10 +10,21 @@ reloads it every minute. That cadence is not a compromise — reward scores are
 sampled once a minute, and the decision this feeds is *where should capital rest
 for the next several hours*, so a few minutes of age costs nothing.
 
-**Change the size box and every number recomputes in the browser.** The scoring
-formula is small enough to mirror in the page, so you can see the yield collapse
-as your own size dilutes your own share — which is the single most important
-thing the raw reward rate hides.
+Two views:
+
+- **Jelzések** — one ranked list, ordered by *daily dollars at your size*, not by
+  yield percentage. Yield ranking puts trivially small opportunities on top; a
+  250%/day row on $25 of capital is not a business. Expanding a row shows where
+  the competing score sits across the band, the quadratic score curve with your
+  distance marked, and how the competition has moved over the past week.
+- **Allokáció** — give it a bankroll and a risk tolerance and it says *what goes
+  where*, with the daily total, the blended yield, and how many resting orders
+  that means. Twenty markets is forty orders, re-quoted as the mids move.
+
+**Change the size or the bankroll and every number recomputes in the browser.**
+`docs/lp.js` mirrors `scoring.py`, so the page answers instantly instead of
+waiting for the next scan. The two are cross-checked: on the same input both
+produce $356 deployed across 20 markets for $206.49/day.
 
 ```bash
 python scanner.py                 # one scan
@@ -71,6 +82,41 @@ four cents an hour means being run over several times a day. That is the whole
 answer to "why is nobody else here".
 
 ---
+
+## Allocating a bankroll
+
+Two wrong answers came before the right one, and both are worth knowing because
+each looks obviously correct until you check the output.
+
+**Marginal greedy is wrong here.** Each market's payout looks concave —
+`rate * w·n / (e + w·n)` — which invites greedy allocation by marginal yield. But
+the $1/day floor makes it *discontinuous*: a market needing a large stake to
+cross the floor gains nothing at every step until it suddenly gains a dollar. Run
+on live data, marginal greedy put **$1,812 of a $2,000 bankroll into one market
+earning $9.88 a day** while a $6 stake elsewhere earned $13.
+
+**Maximising yield is the wrong objective.** Since yield strictly decreases with
+size, every market's yield-maximising stake is the smallest one that clears the
+floor. Ranking by that and buying down the list is correct — and it deployed
+**$240 of $2,000**, leaving the rest idle at a headline 30%/day. Nobody asking
+"where do I put $2,000" wants that answer.
+
+So allocation runs in two phases:
+
+1. **Entry** ranks by yield at the minimum viable stake, which is exactly the
+   question the floor poses: *if I take the cheapest position that gets paid
+   here, how good is it?*
+2. **Top-up** redistributes the rest by marginal yield. Within the chosen set
+   every payout is concave again — the discontinuity is behind us — so greedy is
+   now correct. It stops when the next dollar earns less than the opportunity
+   cost, which is why the planner sometimes reports capital left over.
+
+**Leftover capital is a finding, not a failure.** Markets with an empty book pay
+their whole pool to the first qualifying order, so they saturate at a few dollars
+and more capital earns nothing there. Measured live: $2,000 across 20 markets
+deploys $356; across 150 markets it deploys the lot. Restricted to *contested*
+markets it deploys the full bankroll at 3.21%/day — a believable number, and the
+one to trust.
 
 ## Scoring
 
@@ -140,12 +186,14 @@ free lunch.
 ## Layout
 
 ```
-scoring.py             reward mechanics: score, Q_min, dilution, capacity
-scanner.py             fetch, rank, risk flags, terminal table
-docs/index.html        the dashboard - no build step, no dependencies
-docs/data/state.json   latest scan, committed by CI
-markets_cache.json     market metadata, committed so CI never starts cold
-.github/workflows/     ten-minute scan and commit
+scoring.py               reward mechanics: score, Q_min, dilution, allocation
+scanner.py               fetch, rank, band profile, history, terminal table
+docs/index.html          the dashboard - no build step, no dependencies
+docs/lp.js               mirror of scoring.py, so the page recomputes live
+docs/data/state.json     latest scan, committed by CI
+docs/data/history.json   hourly competition and rate per market, one week
+markets_cache.json       market metadata, committed so CI never starts cold
+.github/workflows/       ten-minute scan and commit
 ```
 
 `markets_cache.json` is tracked deliberately. Metadata needs one CLOB call per

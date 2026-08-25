@@ -46,6 +46,7 @@ PROXY = os.environ.get("POLYMARKET_PROXY_URL", "socks5://127.0.0.1:40000")
 HERE = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.join(HERE, "markets_cache.json")
 STATE = os.path.join(HERE, "docs", "data", "state.json")
+HISTORY = os.path.join(HERE, "docs", "data", "history.json")
 
 # Reward scores are sampled once a minute, so refreshing faster buys nothing.
 REFRESH_SECONDS = 30
@@ -55,6 +56,10 @@ BOOK_BATCH = 50
 VOL_SAMPLE = 60
 # Below this existing score, you would effectively own the reward pool alone.
 CONTESTED_SCORE = 50
+# History lands in hourly slots and keeps a week, so a 10-minute scan cadence
+# does not inflate the file.
+HISTORY_STEP = 3600
+HISTORY_POINTS = 24 * 7
 
 
 def curl(url, post=None, timeout="30"):
@@ -168,6 +173,29 @@ def fetch_books(tokens):
     return out
 
 
+def band_profile(bids, asks, mid, max_spread, bucket=0.5):
+    """
+    Where the competing score actually sits, in half-cent buckets from the mid.
+
+    The detail view's real question is "should I quote at 1c or at 3c", and that
+    is answered by the shape of the competition, not by the raw book. Storing
+    levels would carry price/size pairs the page never draws; storing the score
+    per bucket is about a dozen numbers per market and is exactly what the
+    decision needs.
+
+    Bucket i covers [i*bucket, (i+1)*bucket) cents from the midpoint.
+    """
+    n = int(math.ceil(max_spread / bucket))
+    out = [0.0] * n
+    for price, size in bids + asks:
+        d = abs(price - mid) * 100
+        if d > max_spread:
+            continue
+        i = min(int(d / bucket), n - 1)
+        out[i] += scoring.order_score(d, size, max_spread)
+    return [round(x, 1) for x in out]
+
+
 def levels(book, key):
     return sorted(
         [(float(l["price"]), float(l["size"])) for l in book.get(key, []) if float(l["size"]) > 0],
@@ -225,6 +253,7 @@ def analyse(cfg, meta, books, size, distance):
         "two_sided": two_sided,
         "hours_left": None if hrs is None else round(hrs, 1),
         "below_min_size": size < (cfg["rewards_min_size"] or 0),
+        "band": band_profile(bids, asks, mid, v),
     }
 
 
@@ -391,6 +420,69 @@ def print_table(rows, size, limit=12):
     print(f"\n  {size:.0f} reszveny 1c-re a kozeparhoz | vol = orankenti kozepar-szoras 24h-n")
 
 
+def update_history(rows, now=None):
+    """
+    Append this scan to a rolling per-market series of competition and rate.
+
+    Competition is the number that decides whether a market stays worth quoting,
+    and it is invisible in a snapshot: a market with $50 of score today may have
+    had $5,000 last week, or be filling up as other makers notice it. The scan
+    already runs every ten minutes, so the series costs nothing but the writing.
+
+    Stored on a regular grid as {t0, step, score[], rate[]} rather than as
+    timestamped points - the same compression used for the election globe's
+    price history, where keeping {t, p} objects cost 1479 KB for what fits in
+    190 KB on a grid. Samples land in hourly slots, last write wins, so a
+    ten-minute cadence does not inflate the file.
+    """
+    now = int(now or time.time())
+    slot = now - (now % HISTORY_STEP)
+    hist = {}
+    if os.path.exists(HISTORY):
+        try:
+            with open(HISTORY, encoding="utf-8") as f:
+                hist = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            hist = {}
+
+    keep = HISTORY_POINTS
+    for r in rows:
+        cid = r["condition_id"]
+        h = hist.get(cid)
+        if not h or "t0" not in h:
+            h = {"t0": slot, "step": HISTORY_STEP, "score": [], "rate": []}
+        # index this sample lands in, relative to the series start
+        i = (slot - h["t0"]) // HISTORY_STEP
+        if i < 0:                       # clock skew; restart rather than corrupt
+            h = {"t0": slot, "step": HISTORY_STEP, "score": [], "rate": []}
+            i = 0
+        # gaps become nulls so the x axis stays honest about missing scans
+        while len(h["score"]) < i:
+            h["score"].append(None)
+            h["rate"].append(None)
+        if len(h["score"]) == i:
+            h["score"].append(round(r["existing_score"], 1))
+            h["rate"].append(r["rate"])
+        else:
+            h["score"][i] = round(r["existing_score"], 1)
+            h["rate"][i] = r["rate"]
+        if len(h["score"]) > keep:
+            drop = len(h["score"]) - keep
+            h["t0"] += drop * HISTORY_STEP
+            h["score"] = h["score"][drop:]
+            h["rate"] = h["rate"][drop:]
+        hist[cid] = h
+
+    # markets that left the rewards programme stop being written and age out
+    live = {r["condition_id"] for r in rows}
+    hist = {k: v for k, v in hist.items() if k in live or any(x is not None for x in v["score"][-6:])}
+
+    os.makedirs(os.path.dirname(HISTORY), exist_ok=True)
+    with open(HISTORY, "w", encoding="utf-8") as f:
+        json.dump(hist, f, separators=(",", ":"))
+    return hist
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--size", type=float, default=100.0, help="quote size in shares")
@@ -409,6 +501,7 @@ def main():
             time.sleep(REFRESH_SECONDS)
             continue
 
+        hist = update_history(rows)
         os.makedirs(os.path.dirname(STATE), exist_ok=True)
         with open(STATE, "w", encoding="utf-8") as f:
             json.dump(
@@ -417,7 +510,9 @@ def main():
                 f, separators=(",", ":"),
             )
         print_table(rows, args.size)
-        print(f"  {time.time()-t0:.1f}s | state.json frissitve")
+        sz = os.path.getsize(STATE) / 1024
+        hz = os.path.getsize(HISTORY) / 1024
+        print(f"  {time.time()-t0:.1f}s | state {sz:.0f} KB | history {hz:.0f} KB, {len(hist)} sorozat")
         if not args.watch:
             return
         time.sleep(max(0, REFRESH_SECONDS - (time.time() - t0)))

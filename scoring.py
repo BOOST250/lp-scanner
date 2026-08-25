@@ -137,3 +137,175 @@ def daily_reward(size: float, distance_cents: float, mid: float, max_spread_cent
         reward = 0.0
     capital = capital_required(size, mid, two_sided)
     return reward, (reward / capital if capital else 0.0), share
+
+
+def reward_at(row: dict, size: float, distance_cents: float) -> float:
+    """
+    Daily payout for `size` shares in one scanned market, zero below the floor.
+
+    Takes a scanner row rather than loose arguments because the allocator calls
+    it thousands of times across hundreds of markets, and every call needs the
+    same five fields travelling together.
+    """
+    if size <= 0:
+        return 0.0
+    mine = my_score(size, distance_cents, row["mid"], row["max_spread"], row["two_sided"])
+    if mine <= 0:
+        return 0.0
+    payout = row["rate"] * mine / (row["existing_score"] + mine)
+    return payout if payout >= MIN_PAYOUT_USD else 0.0
+
+
+def min_stake(row: dict, distance_cents: float):
+    """
+    Smallest position that still clears the $1/day floor, and its yield.
+
+    This is the only size worth holding in a market, and it falls out of the
+    algebra rather than being a heuristic. Yield is
+
+        rate * w*n / (e + w*n) / (n * per_share)  =  rate * w / ((e + w*n) * per_share)
+
+    which is strictly decreasing in n. So every extra share past the floor buys
+    a worse rate than the one before it, and the yield-maximising stake is the
+    smallest one that gets paid at all. Solving reward = $1 for n:
+
+        n = e / (w * (rate - 1))
+
+    A market paying $1/day or less can never clear the floor at any size, which
+    is why `rate > MIN_PAYOUT_USD` is a hard gate rather than a filter applied
+    afterwards.
+
+    Returns (shares, capital, daily, yield) or None if the market cannot pay.
+    """
+    v, mid = row["max_spread"], row["mid"]
+    rate, e = row["rate"], row["existing_score"]
+    if v <= 0 or mid <= 0 or distance_cents > v or rate <= MIN_PAYOUT_USD:
+        return None
+    two = row["two_sided"]
+    # score per share, including the one-sided penalty where it applies
+    w = my_score(1.0, distance_cents, mid, v, two)
+    if w <= 0:
+        return None
+    n = e / (w * (rate / MIN_PAYOUT_USD - 1.0))
+    n = max(n, row.get("min_size") or 0.0)          # exchange minimum order size
+    per = capital_required(1.0, mid, two)
+    daily = reward_at(row, n, distance_cents)
+    if daily <= 0:
+        # rounding at the boundary: nudge up until it pays, or give up
+        n *= 1.02
+        daily = reward_at(row, n, distance_cents)
+        if daily <= 0:
+            return None
+    capital = n * per
+    return n, capital, daily, (daily / capital if capital else 0.0)
+
+
+def allocate(rows, budget: float, distance_cents: float = 1.0, max_markets: int = 20,
+             min_marginal_yield: float = 0.002):
+    """
+    Spread a bankroll across reward markets, best yield first.
+
+    WHY NOT MARGINAL GREEDY
+
+      Greedy on marginal yield is the obvious approach and it is wrong here,
+      because the $1/day floor makes each market's payout discontinuous rather
+      than concave: it jumps from nothing to a dollar, so a market needing a
+      large stake to cross looks worthless at every step until it suddenly
+      isn't. Run on live data, marginal greedy put $1,812 of a $2,000 bankroll
+      into one market earning $9.88 a day while a $6 stake elsewhere earned $13.
+
+      Since yield strictly decreases with size, each market has exactly one
+      sensible stake - `min_stake` above - and the problem collapses to
+      ranking markets by the yield they offer at it, then buying down the list.
+
+    THE FLOOR IS NOT A POST-FILTER
+
+      Applied afterwards it produces a confident, wrong answer: a $2,000
+      bankroll spread without it lands on 224 markets promising 68% a day,
+      crediting each sliver with a payout that would never arrive.
+
+    `max_markets` is an operating constraint, not a financial one: every market
+    is a bid and an ask that have to be re-quoted as the mid moves.
+
+    Returns (allocations, totals) with allocations sorted by capital.
+    """
+    empty = {"capital": 0.0, "daily": 0.0, "yield": 0.0, "markets": 0, "orders": 0,
+             "unspent": max(0.0, budget)}
+    if budget <= 0 or not rows:
+        return [], empty
+
+    # Phase 1 - which markets to enter.
+    #
+    # Ranking by yield at the minimum viable stake is what handles the floor's
+    # discontinuity: it asks "if I take the cheapest position that gets paid
+    # here, how good is it", which is exactly the entry decision.
+    ranked = []
+    for r in rows:
+        st = min_stake(r, distance_cents)
+        if st:
+            n, capital, daily, yld = st
+            ranked.append((yld, n, capital, r))
+    ranked.sort(key=lambda x: -x[0])
+
+    chosen, spent = [], 0.0
+    for yld, n, capital, r in ranked:
+        if len(chosen) >= max_markets or spent + capital > budget:
+            continue
+        chosen.append({"row": r, "shares": n})
+        spent += capital
+
+    # Phase 2 - how much to put in each.
+    #
+    # Entering at the minimum stake maximises yield and deploys almost nothing:
+    # on live data it left $1,760 of a $2,000 bankroll idle. Yield is the wrong
+    # objective for someone asking where to put a bankroll; total daily payout
+    # subject to the budget is the right one.
+    #
+    # Above the floor every chosen market's payout is concave again, so marginal
+    # greedy is now correct - the discontinuity that broke it is behind us.
+    # Topping up stops when the next dollar earns less than `min_marginal_yield`,
+    # because past that point idle capital is the better holding.
+    def per_share(r):
+        return capital_required(1.0, r["mid"], r["two_sided"])
+
+    step = 25.0
+    while spent < budget and chosen:
+        best, best_gain, best_cost = None, min_marginal_yield, 0.0
+        for a in chosen:
+            r = a["row"]
+            cost = step * per_share(r)
+            if cost <= 0 or spent + cost > budget:
+                continue
+            gain = (reward_at(r, a["shares"] + step, distance_cents)
+                    - reward_at(r, a["shares"], distance_cents)) / cost
+            if gain > best_gain:
+                best, best_gain, best_cost = a, gain, cost
+        if best is None:
+            break
+        best["shares"] += step
+        spent += best_cost
+
+    allocations = []
+    for a in chosen:
+        r = a["row"]
+        allocations.append({
+            "row": r,
+            "shares": a["shares"],
+            "capital": a["shares"] * per_share(r),
+            "daily": reward_at(r, a["shares"], distance_cents),
+        })
+    allocations.sort(key=lambda a: -a["capital"])
+    daily = sum(a["daily"] for a in allocations)
+    capital = sum(a["capital"] for a in allocations)
+    return allocations, {
+        "capital": capital,
+        "daily": daily,
+        "yield": daily / capital if capital else 0.0,
+        "markets": len(allocations),
+        # every market is a bid and an ask, and both have to be maintained
+        "orders": len(allocations) * 2,
+        # Left over on purpose. Past the best stake in every market worth
+        # quoting, more capital buys a worse rate than the capital already
+        # working, so the honest answer is that the bankroll does not all fit.
+        "unspent": max(0.0, budget - capital),
+    }
