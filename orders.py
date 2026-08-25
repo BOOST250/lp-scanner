@@ -72,6 +72,27 @@ REFRESH_SECONDS = 30
 CREDS = ("POLY_API_KEY", "POLY_API_SECRET", "POLY_PASSPHRASE", "POLY_ADDRESS")
 
 
+# Names people actually have in .env files, mapped onto what this script wants.
+# Nobody should have to rename working variables to satisfy a new tool.
+ALIASES = {
+    "POLY_API_KEY": ("POLYMARKET_API_KEY", "CLOB_API_KEY", "PM_API_KEY"),
+    "POLY_API_SECRET": ("POLYMARKET_API_SECRET", "CLOB_SECRET", "CLOB_API_SECRET", "PM_API_SECRET"),
+    "POLY_PASSPHRASE": ("POLYMARKET_API_PASSPHRASE", "POLYMARKET_PASSPHRASE",
+                        "CLOB_PASS_PHRASE", "CLOB_PASSPHRASE", "PM_PASSPHRASE"),
+    "POLY_ADDRESS": ("POLYMARKET_ADDRESS", "POLYMARKET_PROXY_ADDRESS", "FUNDER"),
+}
+
+# Also picked up when present, because it is the same tunnel the rest of the
+# repo needs and there is no reason to configure it twice.
+PASSTHROUGH = ("POLYMARKET_PROXY_URL",)
+
+# NEVER loaded, whatever the file contains. A wallet private key controls the
+# funds outright, while the API credentials can only place and cancel orders.
+# This script needs the latter and has no business holding the former, so it
+# stays out of this process's environment entirely.
+NEVER_LOAD = ("POLYMARKET_PRIVATE_KEY", "PRIVATE_KEY", "PK", "MNEMONIC", "SEED_PHRASE")
+
+
 def load_env_file(path):
     """
     Read KEY=value lines into the environment, without overwriting what is
@@ -94,9 +115,19 @@ def load_env_file(path):
                 k, v = line.split("=", 1)
                 k = k.strip()
                 v = v.strip().strip('"').strip("'")
-                if k in CREDS and v and not os.environ.get(k):
-                    os.environ[k] = v
-                    found.append(k)
+                if not v or k in NEVER_LOAD:
+                    continue
+                target = None
+                if k in CREDS or k in PASSTHROUGH:
+                    target = k
+                else:
+                    for want, alts in ALIASES.items():
+                        if k in alts:
+                            target = want
+                            break
+                if target and not os.environ.get(target):
+                    os.environ[target] = v
+                    found.append(k if target == k else f"{k}→{target}")
     except OSError as e:
         sys.exit(f"Nem olvashato: {path} ({e.strerror})")
     return found

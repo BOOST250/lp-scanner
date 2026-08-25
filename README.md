@@ -120,8 +120,19 @@ that if it is running. **The keys never leave your machine, never enter the
 repository, and this script never prints them** — not even truncated, since a
 prefix still narrows a brute force.
 
-Credentials are read from the environment first, then from a file. Prefer
-pointing at the file you already have rather than making a copy:
+Credentials are read from the environment first, then from a file. **Existing
+variable names are accepted as-is** — `POLYMARKET_API_KEY`, `CLOB_API_KEY` and
+similar are mapped onto what this script wants, because nobody should have to
+rename working variables to satisfy a new tool. `POLYMARKET_PROXY_URL` is picked
+up too, since it is the same tunnel the rest of the repo needs.
+
+**A private key is never loaded**, whatever the file contains. API credentials
+can place and cancel orders; a wallet private key controls the funds outright.
+This script needs the first and has no business holding the second, so
+`POLYMARKET_PRIVATE_KEY`, `PRIVATE_KEY`, `MNEMONIC` and friends are skipped —
+verified by test, not asserted.
+
+Prefer pointing at the file you already have rather than making a copy:
 
 ```bash
 set POLY_ENV_FILE=C:\path	o\your\.env
