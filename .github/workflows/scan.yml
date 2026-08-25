@@ -64,4 +64,15 @@ jobs:
           git add docs/data/state.json
           git diff --staged --quiet && echo "no change" && exit 0
           git commit -m "scan: $(date -u '+%Y-%m-%d %H:%M') UTC"
-          git push
+
+          # A queued run checked out before the previous run's commit landed, so
+          # its push is rejected as non-fast-forward. Rebasing is safe here: this
+          # job only ever touches one generated file, and the newer scan is the
+          # one that should win.
+          for attempt in 1 2 3; do
+            if git push; then exit 0; fi
+            echo "push rejected, rebasing (attempt $attempt)"
+            git pull --rebase --strategy-option=theirs origin main || exit 1
+          done
+          echo "could not push after 3 attempts" >&2
+          exit 1
