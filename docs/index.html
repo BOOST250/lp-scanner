@@ -507,7 +507,7 @@ function renderOrders() {
     if (m.two_sided_required && m.one_sided) note = '<span class="flags"><span class="h">két oldal kötelező — nulla pont</span></span>';
     else if (m.one_sided) note = '<span class="flags"><span class="s">egy oldal — pontszám harmadolva</span></span>';
     return `<tr class="${m.per_day ? '' : 'dead'}">
-      <td>${m.market.slice(0, 20)}…${note}</td>
+      <td>${m.question || m.market.slice(0, 20)}…${note}</td>
       <td>$${m.per_hour.toFixed(3)}</td><td>$${m.per_minute.toFixed(5)}</td>
       <td>${(m.share * 100).toFixed(2)}%</td>
       <td>${Math.round(m.my_score).toLocaleString()}</td>

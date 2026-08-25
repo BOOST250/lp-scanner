@@ -136,8 +136,14 @@ HMAC-SHA256 over `<timestamp><METHOD><path>`) and offers no read-only mode. A
 public GitHub Pages site cannot hold those credentials, and neither should a
 browser's localStorage on a public origin. So this runs on your machine, reads
 `POLY_API_KEY`, `POLY_API_SECRET`, `POLY_PASSPHRASE` and `POLY_ADDRESS`, and
-serves the result on `http://127.0.0.1:8787/orders.json`. The dashboard reads
-that if it is running. **The keys never leave your machine, never enter the
+serves both the data **and the dashboard itself** on `http://127.0.0.1:8787/`.
+
+Open that address, not the github.io one, when you want to see your orders. The
+published page is HTTPS and this server is plain HTTP on localhost, and a browser
+refuses that combination outright — tested, not assumed: the request fails with
+`Failed to fetch` before the CORS header is ever considered, because mixed
+content is blocked first. Serving the page from here puts both on the same
+origin. The public site keeps working for everything that needs no credentials. **The keys never leave your machine, never enter the
 repository, and this script never prints them** — not even truncated, since a
 prefix still narrows a brute force.
 

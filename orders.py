@@ -225,6 +225,36 @@ def open_orders(c):
     return j if isinstance(j, list) else j.get("data", [])
 
 
+def market_names(need=None):
+    """
+    Question text per condition_id, from the scanner's committed cache.
+
+    A condition_id tells you nothing about which order you are looking at. The
+    names are already fetched and committed for the dashboard, so reusing them
+    costs one file read and no requests; markets missing from the cache simply
+    keep showing their id.
+    """
+    names = {}
+    try:
+        with open(os.path.join(HERE, "markets_cache.json"), encoding="utf-8") as f:
+            names = {k: v.get("question", "") for k, v in json.load(f).items()}
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    # The cache only holds what the dashboard scans, which is markets paying
+    # $10/day or more - your own orders are frequently not among them. A handful
+    # of direct lookups is cheap and beats showing a condition_id.
+    missing = [c for c in (need or []) if c not in names or not names[c]]
+    for cid in missing[:60]:
+        try:
+            m = get_json(f"{CLOB}/markets/{cid}")
+            if isinstance(m, dict) and m.get("question"):
+                names[cid] = m["question"]
+        except (RuntimeError, json.JSONDecodeError):
+            continue
+    return names
+
+
 def reward_configs():
     """
     Every reward market, keyed by condition_id.
@@ -276,6 +306,7 @@ def levels(book, key):
 
 def analyse(c):
     orders = open_orders(c)
+    names = market_names({o.get("market") for o in orders})
     if not orders:
         return {"at": int(time.time()), "orders": [], "markets": [], "totals": {
             "per_minute": 0.0, "per_hour": 0.0, "per_day": 0.0, "orders": 0, "capital": 0.0}}
@@ -341,7 +372,7 @@ def analyse(c):
         total_min += daily / 1440.0
 
         markets.append({
-            "market": cid, "token": tok, "mid": round(mid, 4),
+            "market": cid, "question": names.get(cid, ""), "token": tok, "mid": round(mid, 4),
             "max_spread": v, "rate": rate,
             "q_bid": round(q_bid, 2), "q_ask": round(q_ask, 2),
             "my_score": round(mine, 2), "book_score": round(book_score, 2),
@@ -387,17 +418,51 @@ def show(state):
               f"{m['my_score']:>10,.0f} {m['book_score']:>9,.0f}  {m['market'][:18]}…{note}")
 
 
+MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+        ".json": "application/json", ".css": "text/css; charset=utf-8"}
+
+
 class Handler(BaseHTTPRequestHandler):
+    """
+    Serves the live order data *and* the dashboard itself.
+
+    WHY IT SERVES THE PAGE TOO
+
+      The published dashboard is on https://boost250.github.io and this server is
+      plain HTTP on localhost. A browser refuses that combination outright -
+      tested, not assumed: the fetch fails with "Failed to fetch" before the CORS
+      header is ever considered, because mixed content is blocked first.
+
+      Adding CORS headers cannot fix it, and putting a certificate on localhost is
+      more friction than the problem deserves. Serving docs/ from here instead
+      makes the page and the data the same origin over the same scheme, so
+      http://127.0.0.1:8787/ gives the whole dashboard with live orders in it.
+
+      The public site keeps working for everything that does not need credentials.
+    """
+
     state = {"at": 0, "orders": [], "markets": [], "totals": {}}
 
     def do_GET(self):
-        if self.path.split("?")[0] != "/orders.json":
+        path = self.path.split("?")[0]
+        if path == "/orders.json":
+            self._send(json.dumps(Handler.state).encode(), "application/json")
+            return
+
+        # static files out of docs/, with no traversal above it
+        rel = "index.html" if path in ("/", "") else path.lstrip("/")
+        full = os.path.normpath(os.path.join(HERE, "docs", rel))
+        root = os.path.normpath(os.path.join(HERE, "docs"))
+        if not full.startswith(root) or not os.path.isfile(full):
             self.send_error(404)
             return
-        body = json.dumps(Handler.state).encode()
+        with open(full, "rb") as f:
+            body = f.read()
+        self._send(body, MIME.get(os.path.splitext(full)[1], "application/octet-stream"))
+
+    def _send(self, body, ctype):
         self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        # the dashboard is served from github.io and reads this from localhost
+        self.send_header("Content-Type", ctype)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
