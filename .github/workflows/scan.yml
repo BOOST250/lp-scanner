@@ -54,7 +54,9 @@ jobs:
           print(f"{len(rows)} markets, {len(scored)} with a scoring book")
           # A partial scan is worse than a stale one: it would quietly empty the
           # board and make every market look uncontested.
-          if len(rows) < 100:
+          # The board is ~2,200 markets once the $10/day cut is applied; a run
+          # that returns a few hundred has lost pages, not found a quiet day.
+          if len(rows) < 1200:
               sys.exit(f"only {len(rows)} markets - refusing to publish a partial scan")
           if len(scored) < 5:
               sys.exit("almost nothing has a scoring book - books probably failed to fetch")

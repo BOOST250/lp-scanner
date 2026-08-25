@@ -31,7 +31,7 @@ Two views:
 **Change the size or the bankroll and every number recomputes in the browser.**
 `docs/lp.js` mirrors `scoring.py`, so the page answers instantly instead of
 waiting for the next scan. The two are cross-checked: on the same input both
-produce $356 deployed across 20 markets for $206.49/day.
+produce the same allocation from the same input.
 
 ```bash
 python scanner.py                 # one scan
@@ -62,6 +62,27 @@ so without the relay the published dashboard would work for everyone except its
 owner.
 
 ---
+
+## How many reward markets there are
+
+About **16,500**, paying roughly **$180,000 a day** in total — not the 500 that a
+single page of `/rewards/markets/current` returns.
+
+The endpoint takes `limit=500` and **silently ignores `offset`**: requesting
+offset 0 and offset 500 returns the same rows, with complete overlap. Only
+`next_cursor` advances. This is the worst kind of API bug to hit, because one
+page looks like a finished answer — the scanner reported markets that genuinely
+pay rewards as not being in the programme at all, which reads as a finding rather
+than a gap.
+
+The dashboard scans the **2,200-odd markets paying $10/day or more**, which is
+72% of the entire pool. Below that a market can only ever clear the $1 minimum
+payout for one or two makers, so a third arrival makes it pay nobody — and
+scanning all 16,500 means minutes per run and a 9 MB file committed every ten
+minutes.
+
+`orders.py` applies no such cut. Your own orders have to be found wherever they
+are.
 
 ## The three numbers, and why the obvious one is a trap
 

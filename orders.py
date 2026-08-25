@@ -226,9 +226,31 @@ def open_orders(c):
 
 
 def reward_configs():
-    j = get_json(f"{CLOB}/rewards/markets/current?limit=500")
-    rows = j["data"] if isinstance(j, dict) else j
-    return {r["condition_id"]: r for r in rows if (r.get("total_daily_rate") or 0) > 0}
+    """
+    Every reward market, keyed by condition_id.
+
+    Pages with next_cursor because `offset` is silently ignored - offset=0 and
+    offset=500 return the same rows. Reading one page finds 500 markets; paging
+    properly finds about 6,000, and the difference is why this tool first
+    reported live orders as earning nothing.
+    """
+    out, cursor, seen = {}, "", set()
+    while True:
+        url = f"{CLOB}/rewards/markets/current?limit=500"
+        if cursor:
+            url += f"&next_cursor={cursor}"
+        j = get_json(url)
+        page = j.get("data", []) if isinstance(j, dict) else j
+        if not page:
+            break
+        for r in page:
+            if (r.get("total_daily_rate") or 0) > 0:
+                out[r["condition_id"]] = r
+        cursor = j.get("next_cursor") if isinstance(j, dict) else None
+        if not cursor or cursor == "LTE=" or cursor in seen:
+            break
+        seen.add(cursor)
+    return out
 
 
 def books_for(tokens):

@@ -56,6 +56,18 @@ BOOK_BATCH = 50
 VOL_SAMPLE = 60
 # Below this existing score, you would effectively own the reward pool alone.
 CONTESTED_SCORE = 50
+# Only markets paying at least this much a day are scanned.
+#
+# There are ~16,500 reward markets paying ~$180,000/day in total, and fetching a
+# book and metadata for every one takes minutes and produces a ~9 MB state file
+# committed every ten minutes. The cut is at $10/day because that keeps 72% of
+# the whole pool in 2,436 markets - and because a market paying less can only
+# ever clear the $1 minimum payout for one or two makers, so a third arrival
+# makes it pay nobody.
+#
+# orders.py deliberately does NOT apply this: your own orders must be found
+# wherever they are.
+MIN_DAILY_RATE = 10
 # History lands in hourly slots and keeps a week, so a 10-minute scan cadence
 # does not inflate the file.
 HISTORY_STEP = 3600
@@ -81,10 +93,42 @@ def get_json(url, post=None, timeout="30"):
 
 
 def reward_markets():
-    """Markets currently paying liquidity rewards, with their scoring parameters."""
-    j = get_json(f"{CLOB}/rewards/markets/current?limit=500")
-    rows = j["data"] if isinstance(j, dict) else j
-    return [r for r in rows if (r.get("total_daily_rate") or 0) > 0]
+    """
+    Every market currently paying liquidity rewards, with its scoring parameters.
+
+    PAGE WITH THE CURSOR, NOT WITH offset
+      `limit=500` is the page size, and the endpoint silently ignores `offset` -
+      requesting offset=0 and offset=500 returns the *same* 500 rows, with 100%
+      overlap. Only `next_cursor` advances.
+
+      This was not a theoretical bug. Reading one page looked complete and gave
+      500 markets; paging properly gives about 6,000. The scanner was seeing a
+      twelfth of the board, which meant real reward-paying markets were reported
+      as not being in the programme at all - the most misleading failure this
+      tool can have, because it looks like a finding rather than a gap.
+
+    The cursor is a base64-encoded offset; "LTE=" is base64 "-1" and marks the
+    end. A repeated cursor is also treated as the end, so a server-side change
+    cannot turn this into an endless loop.
+    """
+    rows, cursor, seen = [], "", set()
+    while True:
+        url = f"{CLOB}/rewards/markets/current?limit=500"
+        if cursor:
+            url += f"&next_cursor={cursor}"
+        j = get_json(url)
+        page = j.get("data", []) if isinstance(j, dict) else j
+        if not page:
+            break
+        rows.extend(page)
+        cursor = j.get("next_cursor") if isinstance(j, dict) else None
+        if not cursor or cursor == "LTE=" or cursor in seen:
+            break
+        seen.add(cursor)
+    # the same market can appear twice across pages; last one wins
+    uniq = {r["condition_id"]: r for r in rows
+            if (r.get("total_daily_rate") or 0) >= MIN_DAILY_RATE}
+    return list(uniq.values())
 
 
 def load_cache():
