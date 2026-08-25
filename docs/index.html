@@ -113,6 +113,7 @@ a{color:var(--muted)}
 <nav>
   <button data-v="signals" aria-current="page">Jelzések</button>
   <button data-v="plan">Allokáció</button>
+  <button data-v="ord">Megbízásaim</button>
   <button data-v="pos">Pozícióim</button>
 </nav>
 
@@ -150,6 +151,26 @@ a{color:var(--muted)}
   </div>
   <div class="warnbox" id="p-warn" hidden></div>
   <div class="tablewrap"><table id="t-plan"><thead></thead><tbody></tbody></table></div>
+</section>
+
+<section id="v-ord" hidden>
+  <p class="note">A nyitott megbízásaid <b>hitelesítést igényelnek</b>, amit egy publikus oldal nem tud
+    és nem is szabad hogy tudjon. Ezért a <code>orders.py</code> a te gépeden fut, a kulcsaid környezeti
+    változóban maradnak, és ez az oldal a <code>localhost</code>-ról olvas.</p>
+  <div class="plan" id="ord-stats" hidden>
+    <div class="stat"><b id="o-min">—</b><span>$ / perc</span></div>
+    <div class="stat"><b id="o-hour">—</b><span>$ / óra</span></div>
+    <div class="stat"><b id="o-day">—</b><span>$ / nap</span></div>
+    <div class="stat"><b id="o-orders">—</b><span>nyitott megbízás</span></div>
+    <div class="stat"><b id="o-markets">—</b><span>piac (fizet)</span></div>
+    <div class="stat"><b id="o-capital">—</b><span>lekötve</span></div>
+  </div>
+  <div class="warnbox" id="ord-warn" hidden></div>
+  <div id="ord-empty" class="note"></div>
+  <h3 class="perh" id="ord-mh" hidden>Piaconként</h3>
+  <div class="tablewrap" id="ord-mwrap" hidden><table id="t-ordm"><thead></thead><tbody></tbody></table></div>
+  <h3 class="perh" id="ord-oh" hidden>Megbízásonként</h3>
+  <div class="tablewrap" id="ord-owrap" hidden><table id="t-ordo"><thead></thead><tbody></tbody></table></div>
 </section>
 
 <section id="v-pos" hidden>
@@ -406,6 +427,8 @@ document.addEventListener('click', e => {
     $('#v-signals').hidden = view !== 'signals';
     $('#v-plan').hidden = view !== 'plan';
     $('#v-pos').hidden = view !== 'pos';
+    $('#v-ord').hidden = view !== 'ord';
+    if (view === 'ord') loadOrders();
     $('#ctl-budget').hidden = view !== 'plan';
     $('#ctl-max').hidden = view !== 'plan';
     $('#ctl-addr').hidden = view !== 'pos';
@@ -425,6 +448,91 @@ $('#loadpos').addEventListener('click', loadPositions);
 $('#addr').addEventListener('keydown', e => { if (e.key === 'Enter') loadPositions(); });
 $('#addr').value = localStorage.getItem('lp.addr') || '';
 
+
+
+/* ---- Élő megbízások (helyi kiszolgálóról) -------------------------------- */
+
+const ORDERS_URL = 'http://127.0.0.1:8787/orders.json';
+let ORDERS = null;
+
+function renderOrders() {
+  const st = ORDERS;
+  const has = st && st.totals && st.totals.orders > 0;
+  $('#ord-stats').hidden = !has;
+  $('#ord-mh').hidden = $('#ord-mwrap').hidden = !has;
+  $('#ord-oh').hidden = $('#ord-owrap').hidden = !has;
+  if (!has) {
+    $('#ord-empty').hidden = false;
+    $('#ord-empty').innerHTML = st
+      ? 'A helyi kiszolgáló fut, de nincs nyitott megbízásod.'
+      : `Nem fut a helyi kiszolgáló. Indítsd el:<br><br>
+         <code style="color:var(--signal)">python orders.py --watch</code><br><br>
+         Előtte állítsd be a <code>POLY_API_KEY</code>, <code>POLY_API_SECRET</code>,
+         <code>POLY_PASSPHRASE</code> és <code>POLY_ADDRESS</code> változókat a gépeden.
+         Ez az oldal soha nem látja őket.`;
+    $('#ord-warn').hidden = true;
+    return;
+  }
+  $('#ord-empty').hidden = true;
+
+  const t = st.totals;
+  $('#o-min').textContent = '$' + t.per_minute.toFixed(5);
+  $('#o-hour').textContent = '$' + t.per_hour.toFixed(3);
+  $('#o-day').textContent = '$' + t.per_day.toFixed(2);
+  $('#o-orders').textContent = t.orders;
+  $('#o-markets').textContent = `${t.markets} (${t.paying})`;
+  $('#o-capital').textContent = '$' + Math.round(t.capital).toLocaleString();
+
+  /* The two failures that cost you everything and are invisible on the exchange:
+     an order outside the qualifying band, and a one-sided quote where the rules
+     demand both. Both score exactly zero. */
+  const outOfBand = st.orders.filter(o => !o.in_band);
+  const brokenTwoSided = st.markets.filter(m => m.two_sided_required && m.one_sided);
+  const msgs = [];
+  if (brokenTwoSided.length)
+    msgs.push(`<b>${brokenTwoSided.length} piacon csak az egyik oldalon jegyzel, pedig a középár 0.10 alatt vagy 0.90 fölött van.</b> Ott a szabály szerint kötelező a kétoldalas jegyzés, tehát ezek a megbízások <b>nulla pontot érnek</b>. A tőkéd le van kötve, a jutalom nem jön.`);
+  if (outOfBand.length)
+    msgs.push(`<b>${outOfBand.length} megbízásod a jutalomsávon kívül van</b>, tehát nem termel semmit. A tőzsdén ez sehol nem látszik — a megbízás él, csak nem pontoz.`);
+  const oneSidedMid = st.markets.filter(m => !m.two_sided_required && m.one_sided);
+  if (oneSidedMid.length)
+    msgs.push(`${oneSidedMid.length} piacon egy oldalon jegyzel a középső sávban: ott a pontszámod <b>harmadára</b> csökken. A másik oldal felrakása megháromszorozná.`);
+  msgs.push(`A <code>$/perc</code> <b>ütem, nem ígéret</b>: csak amíg a megbízás pihen. A pontozás percenként mintavételez, tehát egy visszavont megbízás azonnal megszűnik termelni.`);
+  $('#ord-warn').innerHTML = msgs.join('<br><br>');
+  $('#ord-warn').hidden = false;
+
+  $('#t-ordm').querySelector('thead').innerHTML =
+    '<tr><th>Piac</th><th>$/óra</th><th>$/perc</th><th>részesedés</th><th>pontszámod</th><th>könyv</th><th>közép</th><th>megbízás</th></tr>';
+  $('#t-ordm').querySelector('tbody').innerHTML = st.markets.map(m => {
+    let note = '';
+    if (m.two_sided_required && m.one_sided) note = '<span class="flags"><span class="h">két oldal kötelező — nulla pont</span></span>';
+    else if (m.one_sided) note = '<span class="flags"><span class="s">egy oldal — pontszám harmadolva</span></span>';
+    return `<tr class="${m.per_day ? '' : 'dead'}">
+      <td>${m.market.slice(0, 20)}…${note}</td>
+      <td>$${m.per_hour.toFixed(3)}</td><td>$${m.per_minute.toFixed(5)}</td>
+      <td>${(m.share * 100).toFixed(2)}%</td>
+      <td>${Math.round(m.my_score).toLocaleString()}</td>
+      <td>${Math.round(m.book_score).toLocaleString()}</td>
+      <td>${(m.mid * 100).toFixed(1)}c</td><td>${m.orders}</td></tr>`;
+  }).join('');
+
+  $('#t-ordo').querySelector('thead').innerHTML =
+    '<tr><th>Piac</th><th>oldal</th><th>ár</th><th>méret</th><th>távolság</th><th>pontszám</th><th>sávban</th></tr>';
+  $('#t-ordo').querySelector('tbody').innerHTML = st.orders.map(o => `<tr class="${o.in_band ? '' : 'dead'}">
+    <td>${o.market.slice(0, 20)}…</td>
+    <td class="${o.side === 'BUY' ? 'pos' : 'neg'}">${o.side}</td>
+    <td>${(o.price * 100).toFixed(1)}c</td><td>${Math.round(o.size)}</td>
+    <td>${o.distance_c.toFixed(2)}c</td><td>${Math.round(o.score)}</td>
+    <td>${o.in_band ? '<span class="pos">igen</span>' : '<span class="neg">NEM — nulla pont</span>'}</td></tr>`).join('');
+}
+
+async function loadOrders() {
+  try {
+    const r = await fetch(ORDERS_URL, { cache: 'no-store' });
+    ORDERS = r.ok ? await r.json() : null;
+  } catch { ORDERS = null; }
+  renderOrders();
+}
+setInterval(() => { if (view === 'ord') loadOrders(); }, 15000);
 
 /* ---- Pozíciók ------------------------------------------------------------ */
 

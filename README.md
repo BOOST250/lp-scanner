@@ -20,6 +20,8 @@ Two views:
 - **Allokáció** — give it a bankroll and a risk tolerance and it says *what goes
   where*, with the daily total, the blended yield, and how many resting orders
   that means. Twenty markets is forty orders, re-quoted as the mids move.
+- **Megbízásaim** — your live resting orders and what they earn **per minute and
+  per hour**, market by market. Needs `orders.py` running locally (below).
 - **Pozícióim** — your own fills, decomposed. Enter a wallet address and it
   separates spread capture from inventory drift and measures **markout**: where
   the mid went 5 and 30 minutes after each of your fills. That is the number the
@@ -100,6 +102,56 @@ four cents an hour means being run over several times a day. That is the whole
 answer to "why is nobody else here".
 
 ---
+
+## Live orders: `orders.py`
+
+```bash
+python orders.py            # print once
+python orders.py --watch    # refresh every 30s, serve to the dashboard
+```
+
+Open orders are private — the CLOB wants L2 authentication (API key, passphrase,
+HMAC-SHA256 over `<timestamp><METHOD><path>`) and offers no read-only mode. A
+public GitHub Pages site cannot hold those credentials, and neither should a
+browser's localStorage on a public origin. So this runs on your machine, reads
+`POLY_API_KEY`, `POLY_API_SECRET`, `POLY_PASSPHRASE` and `POLY_ADDRESS` from the
+environment, and serves the result on `http://127.0.0.1:8787/orders.json`. The
+dashboard reads that if it is running. **The keys never leave your machine, never
+enter the repository, and this script never prints them.**
+
+### The math is not the scanner's math
+
+`scanner.py` asks *what would I earn if I added an order here*, so it uses
+`share = mine / (existing + mine)`. Your live orders are already resting in the
+public book, so the book score already **includes** them. Using the prospective
+formula on live orders would count your own size twice. Here:
+
+```
+share = your_Q_min / total_book_score
+```
+
+One approximation remains and it is worth knowing: Polymarket computes each
+maker's `Q_min` separately — one-sided quoting is divided by three — then
+normalises across makers. The public book is anonymous, so other makers' `Q_min`
+cannot be reconstructed and the denominator is the raw book score. Where others
+quote one side only their true score is lower, so this **understates** your
+share. The error runs in the safe direction.
+
+### What it catches
+
+Two ways to earn exactly nothing while your capital sits committed, neither of
+which is visible anywhere on the exchange:
+
+- an order **outside the qualifying band** — it rests, it can be filled, it
+  scores zero;
+- a **one-sided quote where the midpoint is below 0.10 or above 0.90** — there
+  the rules require both sides, so `Q_min = min(Q_bid, Q_ask) = 0`.
+
+Both are flagged. A one-sided quote in the middle band is not zero but is divided
+by three, which is also called out: adding the other side triples the score.
+
+`$/min` is a **rate, not a promise**. Scores are sampled once a minute, so it
+accrues only while the order rests; cancel and it stops immediately.
 
 ## Allocating a bankroll
 
