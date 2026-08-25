@@ -3,9 +3,21 @@
 Live ranking of Polymarket's liquidity-reward markets: where resting capital is
 actually paid, how much it can absorb, and what it costs in risk to rest there.
 
+**→ [boost250.github.io/lp-scanner](https://boost250.github.io/lp-scanner/)**
+
+A GitHub Action re-scans every ten minutes and commits the result; the page
+reloads it every minute. That cadence is not a compromise — reward scores are
+sampled once a minute, and the decision this feeds is *where should capital rest
+for the next several hours*, so a few minutes of age costs nothing.
+
+**Change the size box and every number recomputes in the browser.** The scoring
+formula is small enough to mirror in the page, so you can see the yield collapse
+as your own size dilutes your own share — which is the single most important
+thing the raw reward rate hides.
+
 ```bash
 python scanner.py                 # one scan
-python scanner.py --watch         # refresh every 30s, writes state.json
+python scanner.py --watch         # refresh every 30s, writes docs/data/state.json
 python scanner.py --size 500      # size the quote in shares
 ```
 
@@ -128,8 +140,16 @@ free lunch.
 ## Layout
 
 ```
-scoring.py         reward mechanics: score, Q_min, dilution, capacity
-scanner.py         fetch, rank, risk flags, terminal table, state.json
-markets_cache.json market metadata, refreshed every 6 hours
-state.json         latest scan, for a UI to read
+scoring.py             reward mechanics: score, Q_min, dilution, capacity
+scanner.py             fetch, rank, risk flags, terminal table
+docs/index.html        the dashboard - no build step, no dependencies
+docs/data/state.json   latest scan, committed by CI
+markets_cache.json     market metadata, committed so CI never starts cold
+.github/workflows/     ten-minute scan and commit
 ```
+
+`markets_cache.json` is tracked deliberately. Metadata needs one CLOB call per
+market, and a cold cache means 500 sequential lookups: about half of them fail
+under rate limiting, and the board silently shrinks. A market missing from the
+board does not read as missing — it reads as *no competition here*, which is the
+most expensive thing this tool could get wrong.
