@@ -273,7 +273,9 @@ def analyse(cfg, meta, books, size, distance):
     v = cfg["rewards_max_spread"]
     spread_c = (asks[0][0] - bids[0][0]) * 100
 
-    existing = scoring.book_score(bids, mid, v) + scoring.book_score(asks, mid, v)
+    # same-scale denominator: see scoring.book_qmin for why summing both
+    # sides against a one-sided Q_min halves every share
+    existing = scoring.book_qmin(bids, asks, mid, v)
     two_sided = scoring.requires_two_sided(mid)
     reward, yld, share = scoring.daily_reward(
         size, distance, mid, v, existing, cfg["total_daily_rate"], two_sided

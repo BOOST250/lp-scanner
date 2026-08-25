@@ -180,6 +180,27 @@ An authentication failure prints what to check — secret not base64, address no
 matching the key, revoked credentials, clock skew — and never echoes a value
 back.
 
+### The denominator has to be in the same units
+
+Polymarket normalises across makers: your share is `Q_min(you)` divided by the
+**sum of every maker's `Q_min`**. `Q_min` is a per-maker quantity roughly the size
+of *one side* of a quote — a balanced two-sided maker with 100 on each side has
+`Q_min = 100`, not 200.
+
+Dividing that by `bid_score + ask_score` therefore compares a one-sided number
+with a two-sided one. Measured on live orders, it understated the payout by
+**3.2×**: $27.75/day where the corrected figure is $87.68/day.
+
+The book is anonymous, so individual makers' `Q_min` cannot be recovered — but
+the sum is bounded:
+
+```
+sum_m min(bid_m, ask_m)  <=  min(sum_m bid_m, sum_m ask_m)
+```
+
+so `min(bid_score, ask_score)` is both the right scale and an upper bound. What
+error remains still understates your share, which is the safe direction.
+
 ### The math is not the scanner's math
 
 `scanner.py` asks *what would I earn if I added an order here*, so it uses

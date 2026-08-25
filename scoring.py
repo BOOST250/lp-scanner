@@ -80,6 +80,44 @@ def book_score(levels, mid: float, max_spread_cents: float) -> float:
     return total
 
 
+def book_qmin(bids, asks, mid: float, max_spread_cents: float) -> float:
+    """
+    The competing score, on the same scale as one maker's Q_min.
+
+    THE UNIT MISTAKE THIS EXISTS TO PREVENT
+
+      Polymarket normalises across makers: your share is Q_min(you) divided by
+      the SUM of every maker's Q_min. Q_min is a per-maker quantity roughly the
+      size of one side of their quote - a balanced two-sided maker with 100 on
+      each side has Q_min = 100, not 200.
+
+      So comparing your Q_min against bid_score + ask_score compares a one-sided
+      quantity with a two-sided one, and understates your share by about half.
+      That is not a rounding difference; it is a factor of two on every number
+      downstream.
+
+    WHY min() AND NOT HALF THE TOTAL
+
+      The book is anonymous, so individual makers' Q_min cannot be recovered.
+      But the sum is bounded:
+
+          sum_m min(bid_m, ask_m)  <=  min(sum_m bid_m, sum_m ask_m)
+
+      so min(bid_score, ask_score) is both the right scale and an upper bound on
+      the true denominator. The remaining error still understates your share -
+      makers who quote one side contribute less than this allows - which is the
+      safe direction to be wrong in.
+    """
+    b = book_score(bids, mid, max_spread_cents)
+    a = book_score(asks, mid, max_spread_cents)
+    if requires_two_sided(mid):
+        return min(b, a)
+    # In the middle band a one-sided maker still scores, at a third. The book is
+    # somewhere between "all two-sided" (min) and "all one-sided" (max/3); the
+    # larger of those two is the conservative choice.
+    return max(min(b, a), max(b, a) / ONE_SIDED_DIVISOR)
+
+
 def requires_two_sided(mid: float) -> bool:
     return not (TWO_SIDED_BELOW <= mid <= TWO_SIDED_ABOVE)
 

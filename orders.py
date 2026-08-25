@@ -28,14 +28,16 @@ THE MATH IS NOT THE SCANNER'S MATH
   formula on live orders would count your own size twice and overstate your
   earnings. Here:
 
-      share = your_Q_min / total_book_score
+      share = your_Q_min / sum of every maker's Q_min
 
-  One honest approximation remains. Polymarket computes each maker's Q_min
-  separately - one-sided quoting is divided by three - and then normalises across
-  makers. The public book is anonymous, so other makers' Q_min cannot be
-  reconstructed; the denominator is the raw book score instead. Where others quote
-  one side only, their true score is lower than that, so this *understates* your
-  share. The error runs in the safe direction.
+  Getting the denominator's *units* right matters more than it sounds. Q_min is
+  a per-maker quantity about the size of one side of a quote, so dividing it by
+  bid_score + ask_score compares a one-sided number with a two-sided one and
+  halves the answer. See scoring.book_qmin.
+
+  One approximation remains: the book is anonymous, so individual makers' Q_min
+  cannot be recovered and min(bid, ask) is used as an upper bound on their sum.
+  That still understates your share slightly, which is the safe direction.
 
 ACCRUAL
 
@@ -375,7 +377,7 @@ def analyse(c):
         mine = scoring.combine_sides(q_bid, q_ask, mid) if v else 0.0
         # the book already contains these orders, so this is a share of the whole,
         # not an addition to it
-        book_score = (scoring.book_score(bids, mid, v) + scoring.book_score(asks, mid, v)) if v else 0.0
+        book_score = scoring.book_qmin(bids, asks, mid, v) if v else 0.0
         share = (mine / book_score) if book_score > 0 else 0.0
         share = min(share, 1.0)
         daily = rate * share
